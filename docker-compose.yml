@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: migr_ai
+      POSTGRES_USER: migr_ai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U migr_ai -d migr_ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  knowledge-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: migr_ai
+      PGPASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if ! psql -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='migr_ai_knowledge'" | grep -q 1; then
+          createdb migr_ai_knowledge
+        fi
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://migr_ai:${POSTGRES_PASSWORD:-change_me}@db:5432/migr_ai?sslmode=disable
+      KNOWLEDGE_DATABASE_URL: postgres://migr_ai:${POSTGRES_PASSWORD:-change_me}@db:5432/migr_ai_knowledge?sslmode=disable
+    depends_on:
+      knowledge-db-init:
+        condition: service_completed_successfully
+  sourceparser:
+    build: .
+    entrypoint: ["/sourceparser"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KNOWLEDGE_DATABASE_URL: postgres://migr_ai:${POSTGRES_PASSWORD:-change_me}@db:5432/migr_ai_knowledge?sslmode=disable
+    depends_on:
+      bot:
+        condition: service_started
+volumes:
+  postgres_data:
