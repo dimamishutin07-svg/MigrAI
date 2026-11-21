@@ -10,3 +10,5 @@
 !internal/**
 !knowledge/
 !knowledge/sources.json
+!knowledge/texts/
+!knowledge/texts/*.md

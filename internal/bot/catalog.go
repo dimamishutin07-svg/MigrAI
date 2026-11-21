@@ -6,19 +6,20 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"sort"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
 )
 
 type Source struct {
-	Country string   `json:"country"`
-	Title   string   `json:"title"`
-	URL     string   `json:"url"`
-	Checked string   `json:"checked_at"`
-	Summary string   `json:"summary"`
-	Topics  []string `json:"topics"`
+	Country string       `json:"country"`
+	Title   string       `json:"title"`
+	URL     string       `json:"url"`
+	Checked string       `json:"checked_at"`
+	Summary string       `json:"summary"`
+	Texts   []SourceText `json:"texts,omitempty"`
+	Topics  []string     `json:"topics"`
 }
 
 type Catalog struct {
@@ -47,6 +48,11 @@ func LoadCatalog(path string) (*Catalog, error) {
 			return nil, fmt.Errorf("invalid or duplicate knowledge document %d in %s", i+1, path)
 		}
 		seen[d.URL] = true
+		for j := range c.Documents[i].Texts {
+			if err := c.Documents[i].Texts[j].load(filepath.Dir(path)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	c.Digest = fmt.Sprintf("%x", sha256.Sum256(data))
 	return &c, nil
@@ -76,54 +82,5 @@ func mentions(text, country string) bool {
 }
 
 func (c *Catalog) Context(profileCountries, question string, now time.Time) string {
-	countries := map[string]bool{}
-	for _, text := range []string{question, profileCountries} {
-		for _, d := range c.Documents {
-			if mentions(text, d.Country) {
-				countries[d.Country] = true
-			}
-		}
-		if len(countries) > 0 {
-			break
-		}
-	}
-	type match struct {
-		source Source
-		score  int
-	}
-	var matches []match
-	lower := strings.ToLower(question)
-	for _, d := range c.Documents {
-		if len(countries) > 0 && !countries[d.Country] {
-			continue
-		}
-		score := 0
-		for _, term := range d.Topics {
-			if strings.Contains(lower, strings.ToLower(term)) {
-				score++
-			}
-		}
-		matches = append(matches, match{d, score})
-	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].score != matches[j].score {
-			return matches[i].score > matches[j].score
-		}
-		return matches[i].source.Checked > matches[j].source.Checked
-	})
-	var b strings.Builder
-	cutoff := now.UTC().AddDate(0, 0, -14).Format(time.DateOnly)
-	for _, m := range matches {
-		d := m.source
-		body := d.Summary
-		if d.Checked < cutoff {
-			body = "Требует перепроверки. Ссылку можно предложить для проверки."
-		}
-		line := fmt.Sprintf("[%s] %s | %s | %s\n%s\n", d.Country, d.Title, d.Checked, d.URL, body)
-		if b.Len()+len(line) > 32000 {
-			break
-		}
-		b.WriteString(line)
-	}
-	return b.String()
+	return c.Search(profileCountries, question, now, SearchPlan{})
 }
