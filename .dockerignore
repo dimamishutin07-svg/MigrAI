@@ -1,0 +1,12 @@
+*
+!Dockerfile
+!go.mod
+!go.sum
+!schema.sql
+!cmd/
+!cmd/bot/
+!cmd/bot/**
+!internal/
+!internal/**
+!knowledge/
+!knowledge/sources.json
