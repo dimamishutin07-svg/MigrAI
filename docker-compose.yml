@@ -24,5 +24,22 @@ services:
     depends_on:
       db:
         condition: service_healthy
+  panel:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles: [admin]
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - panel_data:/data
+      - panel_config:/config
+    depends_on:
+      - bot
 volumes:
+  panel_data:
+  panel_config:
   postgres_data:

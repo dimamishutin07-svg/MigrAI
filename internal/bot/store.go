@@ -170,6 +170,6 @@ func EncodeCollectionCSV(job CollectionJob, docs []CollectionDocument) []byte {
 
 func (s *Store) SaveSurvey(ctx context.Context,id int64,p map[string]string,key string) error {
  raw,err:=json.Marshal(p);if err!=nil{return err}
- _,err=s.db.Exec(ctx,`UPDATE users SET profile=$2,profile_confirmed=false,awaiting_confirmation=$3,interview_question=$4,updated_at=now() WHERE telegram_id=$1`,id,raw,key=="","survey:"+key)
+ _,err=s.db.Exec(ctx,`UPDATE users SET profile=$2,profile_confirmed=false,feedback_mode=false,awaiting_confirmation=$3,interview_question=$4,updated_at=now() WHERE telegram_id=$1`,id,raw,key=="","survey:"+key)
  return err
 }
