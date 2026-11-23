@@ -43,18 +43,39 @@ func handle(ctx context.Context,tg *bot.Telegram,ai *bot.AI,store *bot.Store,cat
 		}
 	}
 	user,err:=store.Get(ctx,m.From.ID,m.From.Username);if err!=nil{return err}
-	if text=="/delete" { if err=store.DeleteUser(ctx,m.From.ID);err!=nil{return err};return tg.Send(ctx,m.Chat.ID,"Ваш профиль и история диалога удалены.") }
-	if text=="/start"||text=="/restart" { if text=="/restart"{if err=store.DeleteUser(ctx,m.From.ID);err!=nil{return err};user,err=store.Get(ctx,m.From.ID,m.From.Username);if err!=nil{return err}};firstQuestion:="Начнём с главного: какое у вас гражданство или несколько гражданств, и где вы живёте сейчас? Нужны только страны — не присылайте номер паспорта, фото документов или другие личные данные.";if err=store.BeginInterview(ctx,m.From.ID,firstQuestion);err!=nil{return err};greeting:="Привет! 👋 Я буду вашим дружелюбным проводником по переезду. Вместе соберём портрет, а потом подберём маршруты под ваши обстоятельства и приоритеты. Можно отвечать коротко или сразу рассказать всё, что считаете важным.";if len(user.Profile)>0{greeting="С возвращением! 👋 Ваш портрет сохранён — можем уточнить его и обновить детали, а потом подобрать маршруты под ваши приоритеты."};return tg.Send(ctx,m.Chat.ID,greeting+"\n\n"+firstQuestion) }
-	if text=="/help" {help:="Команды:\n/start — начать\n/delete — удалить профиль и историю\n/restart — начать заново\n\nЯ задаю по одному вопросу за раз и собираю только сведения, нужные для сравнения маршрутов. После подтверждения портрета можно обсудить подходящие направления.";return tg.Send(ctx,m.Chat.ID,help)}
-	if user.Awaiting {
-		if isYes(text){if err=store.Confirm(ctx,m.From.ID);err!=nil{return err};return tg.Send(ctx,m.Chat.ID,"Портрет подтверждён ✅\n\nТеперь расскажите, какой маршрут хотите обсудить — или напишите «предложи варианты», и я сравню направления под ваши приоритеты.")}
-		if isNo(text){if err=store.SaveProfile(ctx,m.From.ID,user.Profile,false);err!=nil{return err};if err=store.SetInterviewQuestion(ctx,m.From.ID,"Пользователь хочет исправить портрет; извлеки изменения из следующего сообщения и сохрани остальные сведения.");err!=nil{return err};return tg.Send(ctx,m.Chat.ID,"Хорошо, напишите, что поправить, одним сообщением — я обновлю портрет.")}
-	}
-	if !user.Confirmed {
-		profile,missing,question,e:=ai.ExtractProfile(ctx,user.Profile,user.InterviewQuestion,text);if e!=nil{log.Printf("profile extraction failed: %v",e);return tg.Send(ctx,m.Chat.ID,"Не удалось обработать ответ через ИИ-сервис. Ответ не сохранён — попробуйте отправить его ещё раз позже.")};if err=store.SaveProfile(ctx,m.From.ID,profile,false);err!=nil{return err}
-		if len(missing)>0 { if question==""{question=questionFor(missing[0])};if err=store.SetInterviewQuestion(ctx,m.From.ID,question);err!=nil{return err};return tg.Send(ctx,m.Chat.ID,question) }
-		if err=store.SaveProfile(ctx,m.From.ID,profile,true);err!=nil{return err};if err=store.SetInterviewQuestion(ctx,m.From.ID,"");err!=nil{return err};return tg.Send(ctx,m.Chat.ID,"Проверьте портрет:\n\n"+formatProfile(profile)+"\n\nВсё верно? Ответьте «Да» или напишите, что исправить.")
-	}
+	if text=="/delete" { if err=store.DeleteUser(ctx,m.From.ID);err!=nil{return err};return tg.SendChoices(ctx,m.Chat.ID,"Ваш профиль и история диалога удалены.",nil) }
+ if text=="/help" {return tg.Send(ctx,m.Chat.ID,"/start — продолжить анкету\n/restart — начать заново\n/delete — удалить профиль и историю\n\nНажимайте кнопки или пишите своими словами. Любой вопрос можно пропустить. Ответы сохраняются после каждого сообщения.")}
+ if text=="/start" || text=="/restart" {
+  if text=="/restart" {if err=store.DeleteUser(ctx,m.From.ID);err!=nil{return err};user,err=store.Get(ctx,m.From.ID,m.From.Username);if err!=nil{return err}}
+  key:=bot.SurveyNext(user.Profile)
+  if strings.HasPrefix(user.InterviewQuestion,"survey:") && !user.Confirmed && !user.Awaiting {key=strings.TrimPrefix(user.InterviewQuestion,"survey:");if _,ok:=bot.SurveyByKey(key);!ok{key=bot.SurveyNext(user.Profile)}}
+  if err=store.SaveSurvey(ctx,m.From.ID,user.Profile,key);err!=nil{return err}
+  if err=tg.Send(ctx,m.Chat.ID,"Привет! 👋 Соберём ваш портрет короткими шагами. Выбирайте кнопки или пишите своими словами. Можно пропустить вопрос и вернуться позже через /start — ответы сохраняются. Номера документов и сканы не нужны.");err!=nil{return err}
+  return sendSurvey(ctx,tg,m.Chat.ID,user.Profile,key,"")
+ }
+ if user.Awaiting && isYes(text) {if err=store.Confirm(ctx,m.From.ID);err!=nil{return err};return tg.SendChoices(ctx,m.Chat.ID,"Портрет подтверждён ✅ Напишите вопрос или «предложи варианты» — сравним маршруты под ваши планы.",nil)}
+ if user.Awaiting && isNo(text) {
+  if err=store.SetInterviewQuestion(ctx,m.From.ID,"survey-edit");err!=nil{return err}
+  return tg.SendChoices(ctx,m.Chat.ID,"Какой пункт исправить? Отправьте его номер из портрета выше.",nil)
+ }
+ if user.InterviewQuestion=="survey-edit" {
+  key:=bot.SurveyEditKey(text);if key=="" {return tg.Send(ctx,m.Chat.ID,"Пришлите номер пункта из портрета, например 1.")}
+  if err=store.SaveSurvey(ctx,m.From.ID,user.Profile,key);err!=nil{return err}
+  return sendSurvey(ctx,tg,m.Chat.ID,user.Profile,key,"Укажите новый ответ.")
+ }
+ if !user.Confirmed {
+  if len([]rune(text))>1500 {return tg.Send(ctx,m.Chat.ID,"Сократите ответ до 1500 символов, чтобы сохранить самое важное.")}
+  key:=strings.TrimPrefix(user.InterviewQuestion,"survey:")
+  if _,ok:=bot.SurveyByKey(key);!ok {
+   // Older interviews resume at the first unanswered field without assigning an ambiguous reply.
+   key=bot.SurveyNext(user.Profile)
+   if err=store.SaveSurvey(ctx,m.From.ID,user.Profile,key);err!=nil{return err}
+   return sendSurvey(ctx,tg,m.Chat.ID,user.Profile,key,"Анкета обновилась. Продолжим с сохранёнными ответами.")
+  }
+  key,hint:=bot.SurveyAnswer(user.Profile,key,text)
+  if err=store.SaveSurvey(ctx,m.From.ID,user.Profile,key);err!=nil{return err}
+  return sendSurvey(ctx,tg,m.Chat.ID,user.Profile,key,hint)
+ }
 	if err=store.AddMessage(ctx,m.From.ID,"user",text);err!=nil{return err};history,err:=store.History(ctx,m.From.ID,12);if err!=nil{return err}
 	plan:=catalog.Plan(ctx,ai,user.Profile["countries"],history)
 	knowledge:=catalog.Search(user.Profile["countries"],text,time.Now(),plan)
@@ -64,30 +85,16 @@ func handle(ctx context.Context,tg *bot.Telegram,ai *bot.AI,store *bot.Store,cat
 
 func isYes(s string)bool{v:=strings.ToLower(strings.TrimSpace(s));return v=="да"||v=="верно"||v=="всё верно"||v=="все верно"||v=="подтверждаю"}
 func isNo(s string)bool{v:=strings.ToLower(strings.TrimSpace(s));return v=="нет"||v=="неверно"||v=="исправить"}
-func questionFor(field string)string{questions:=map[string]string{
-	"citizenship":"Какое у вас гражданство или несколько гражданств? Достаточно назвать страны.",
-	"current_country":"В какой стране вы живёте сейчас?",
-	"goal":"Какова главная цель переезда: работа, удалённая работа, учёба, семья или что-то другое?",
-	"timeline":"Когда вы хотели бы переехать — как можно скорее, в ближайшие месяцы или позже?",
-	"profession":"Чем вы занимаетесь и планируете ли работать после переезда?",
-	"budget":"На какой бюджет для переезда и первых месяцев вы ориентируетесь? Можно примерный диапазон и валюту.",
-	"languages":"На каких языках вы говорите и насколько свободно?",
-	"priorities":"Что для вас важнее всего: скорость, простота оформления, стоимость, работа, безопасность или русскоязычное окружение? Выберите несколько или назовите своё.",
-};if q,ok:=questions[field];ok{return q};return "Что ещё важно учесть, чтобы подобрать подходящий вам маршрут?"}
-func formatProfile(p map[string]string)string{
-	type field struct{key,label string}
-	type group struct{title string;fields []field}
-	groups:=[]group{
-		{"🛂 Отправная точка",[]field{{"citizenship","Гражданство"},{"current_country","Где живёте"},{"family","Кто едет с вами"}}},
-		{"🎯 Куда и зачем",[]field{{"goal","Цель"},{"timeline","Сроки"},{"countries","Интересующие страны"}}},
-		{"💼 Работа и бюджет",[]field{{"profession","Профессия и формат работы"},{"income","Доход"},{"budget","Бюджет на переезд"}}},
-		{"🌍 Языки и приоритеты",[]field{{"languages","Языки"},{"priorities","Что важнее всего"},{"constraints","Что важно учесть"},{"age","Возрастной диапазон"}}},
-	}
-	var b strings.Builder
-	b.WriteString("🧭 Ваш маршрутный портрет\n")
-	for _,g:=range groups{var lines []string;for _,item:=range g.fields{if v:=strings.TrimSpace(p[item.key]);v!=""{lines=append(lines,"• "+item.label+": "+v)}};if len(lines)>0{b.WriteString("\n"+g.title+"\n"+strings.Join(lines,"\n")+"\n")}}
-	if b.Len()==len("🧭 Ваш маршрутный портрет\n"){return "Пока не удалось собрать портрет. Давайте попробуем ещё раз — расскажите немного о себе и планах."}
-	return strings.TrimSpace(b.String())
+func sendSurvey(ctx context.Context,tg *bot.Telegram,id int64,p map[string]string,key,hint string) error {
+ if key!="" {text,choices:=bot.SurveyPrompt(key,p);if hint!=""{text=hint+"\n\n"+text};return tg.SendChoices(ctx,id,text,choices)}
+ // Split long portraits at line boundaries to stay below Telegram's message limit.
+ var part strings.Builder
+ for _,line:=range strings.Split(bot.SurveyPortrait(p),"\n") {
+  if len([]rune(part.String()))+len([]rune(line))>3500 {if err:=tg.Send(ctx,id,part.String());err!=nil{return err};part.Reset()}
+  part.WriteString(line+"\n")
+ }
+ if part.Len()>0 {if err:=tg.Send(ctx,id,part.String());err!=nil{return err}}
+ return tg.SendChoices(ctx,id,"Всё верно? Можно исправить любой пункт по номеру.",[]string{"Да","Исправить"})
 }
 func jsonText(v any)string{b,_:=json.Marshal(v);return string(b)}
 var (

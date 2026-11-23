@@ -17,7 +17,7 @@ type Message struct { Text string `json:"text"`; From struct { ID int64 `json:"i
 func NewTelegram(token string) *Telegram { return &Telegram{token:token, client:&http.Client{Timeout:40*time.Second}} }
 func (t *Telegram) call(ctx context.Context, method string, payload any, out any) error {
 	b, _ := json.Marshal(payload); req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.telegram.org/bot"+t.token+"/"+method, bytes.NewReader(b)); if err != nil { return fmt.Errorf("telegram %s request setup failed",method) }; req.Header.Set("Content-Type","application/json")
-	r, err := t.client.Do(req); if err != nil { return fmt.Errorf("telegram %s request failed",method) }; defer r.Body.Close(); if r.StatusCode >= 300 { return fmt.Errorf("telegram %s: HTTP %s",method,r.Status) }; if out != nil { return json.NewDecoder(r.Body).Decode(out) }; return nil
+	r, err := t.client.Do(req); if err != nil { return fmt.Errorf("telegram %s request failed",method) }; defer r.Body.Close(); if r.StatusCode >= 300 { return fmt.Errorf("telegram %s: HTTP %s",method,r.Status) }; if out != nil { return json.NewDecoder(r.Body).Decode(out) }; var result struct { OK bool `json:"ok"` }; if err=json.NewDecoder(r.Body).Decode(&result);err!=nil{return fmt.Errorf("telegram %s invalid response",method)};if !result.OK{return fmt.Errorf("telegram %s rejected",method)};return nil
 }
 func (t *Telegram) Updates(ctx context.Context, offset int) ([]Update,error) { var res struct { OK bool `json:"ok"`; Result []Update `json:"result"`; Description string `json:"description"` }; err:=t.call(ctx,"getUpdates",map[string]any{"offset":offset,"timeout":25,"allowed_updates":[]string{"message"}},&res); if err!=nil{return nil,err}; if !res.OK{return nil,fmt.Errorf("telegram: %s",res.Description)}; return res.Result,nil }
 func (t *Telegram) Send(ctx context.Context, chatID int64, text string) error { return t.call(ctx,"sendMessage",map[string]any{"chat_id":chatID,"text":text,"disable_web_page_preview":true},nil) }
@@ -57,4 +57,17 @@ func (t *Telegram) SendDocument(ctx context.Context, chatID int64, filename, cap
 		return fmt.Errorf("telegram sendDocument: HTTP %s", r.Status)
 	}
 	return nil
+}
+
+// Reply keyboards allow both one-tap answers and ordinary text messages.
+func (t *Telegram) SendChoices(ctx context.Context, chatID int64, text string, choices []string) error {
+ var keyboard [][]map[string]string
+ for i:=0;i<len(choices);i+=2 {
+  row:=[]map[string]string{{"text":choices[i]}}
+  if i+1<len(choices){row=append(row,map[string]string{"text":choices[i+1]})}
+  keyboard=append(keyboard,row)
+ }
+ var markup any=map[string]any{"remove_keyboard":true}
+ if len(keyboard)>0 {markup=map[string]any{"keyboard":keyboard,"resize_keyboard":true,"one_time_keyboard":false,"input_field_placeholder":"Выберите вариант или напишите ответ"}}
+ return t.call(ctx,"sendMessage",map[string]any{"chat_id":chatID,"text":text,"reply_markup":markup,"disable_web_page_preview":true},nil)
 }
